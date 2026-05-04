@@ -14,6 +14,22 @@ Oppure, se hai già clonato la repo:
 git submodule update --init --recursive
 ```
 
+## Dependecies
+
+Crea l'ambiente virtuale
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+Scarica dipendenze e dataset
+
+```bash
+bash setup_deps.sh
+```
+
+
 ## 🛠️ Struttura del progetto
 
 
