@@ -1,0 +1,3 @@
+[submodule "deps"]
+	path = deps
+	url = https://github.com/FarInHeight/Visual-Place-Recognition-Project.git
