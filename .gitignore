@@ -42,3 +42,5 @@ dist/
 data/
 
 deps/
+logs/
+/deps
