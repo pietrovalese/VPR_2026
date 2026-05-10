@@ -10,6 +10,7 @@ git clone --recurse-submodules https://github.com/pietrovalese/VPR_2026.git
 
 Oppure, se hai già clonato la repo:
 
+
 ```bash
 git submodule update --init --recursive
 ```
