@@ -40,5 +40,4 @@ dist/
 *.nbconvert.ipynb
 
 data/
-
-deps/
+logs/
