@@ -136,12 +136,47 @@ def _load_mixvpr():
     return _get_model(method="mixvpr", descriptors_dimension=4096).eval()
 
 
+def _load_apgem():
+    return _get_model(method="apgem").eval()
+
+
+def _load_convap():
+    return _get_model(method="convap", descriptors_dimension=4096).eval()
+
+
+def _load_sfrs():
+    return _get_model(method="sfrs").eval()
+
+
+def _load_boq_resnet():
+    return _get_model(method="boq", backbone="ResNet50", descriptors_dimension=16384).eval()
+
+
+def _load_boq_dino():
+    return _get_model(method="boq", backbone="Dinov2", descriptors_dimension=12288).eval()
+
+
+def _load_dinomix():
+    return _get_model(method="dinomix").eval()
+
+
+def _load_clique_mining():
+    return _get_model(method="clique-mining").eval()
+
+
 # Registry dei modelli — aggiungi qui senza toccare altro codice
 MODEL_CONFIGS: dict[str, ModelConfig] = {
-    "cosplace": ModelConfig("cosplace", (512, 512), 512,  _load_cosplace),
-    "megaloc":  ModelConfig("megaloc",  (322, 322), 4096, _load_megaloc),
-    "netvlad":  ModelConfig("netvlad",  (480, 640), 4096, _load_netvlad),
-    "mixvpr":   ModelConfig("mixvpr",   (320, 320), 4096, _load_mixvpr),
+    "clique_mining": ModelConfig("clique_mining",  (322, 322),  8448,  _load_clique_mining),
+    "cosplace":      ModelConfig("cosplace",      (512, 512), 512,   _load_cosplace),
+    "megaloc":       ModelConfig("megaloc",        (322, 322), 8448,  _load_megaloc),
+    "netvlad":       ModelConfig("netvlad",        (480, 640), 4096,  _load_netvlad),
+    "mixvpr":        ModelConfig("mixvpr",         (320, 320), 4096,  _load_mixvpr),
+    #"apgem":         ModelConfig("apgem",          (1024, 1024), 2048, _load_apgem),
+    "convap":        ModelConfig("convap",         (320, 320),  4096,  _load_convap),
+    "sfrs":          ModelConfig("sfrs",           (480, 640),  4096,  _load_sfrs),
+    "boq_resnet":    ModelConfig("boq_resnet",     (322, 322),  16384, _load_boq_resnet),
+    "boq_dino":      ModelConfig("boq_dino",       (322, 322),  12288, _load_boq_dino),
+    "dinomix":       ModelConfig("dinomix",        (224, 224),  4096,  _load_dinomix),
 }
 
 

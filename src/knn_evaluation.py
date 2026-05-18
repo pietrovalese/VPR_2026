@@ -173,7 +173,7 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--datasets",        nargs="+", default=None)
     p.add_argument("--methods",         nargs="+", default=None)
-    p.add_argument("--metrics",         nargs="+", default=["l2", "dot"],
+    p.add_argument("--metrics",         nargs="+", default=["l2"],
                    choices=["l2", "dot"])
     p.add_argument("--k",               type=int,  default=20)
     p.add_argument("--recall_values",   nargs="+", type=int, default=[1, 5, 10, 20])
