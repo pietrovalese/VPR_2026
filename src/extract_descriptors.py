@@ -71,6 +71,10 @@ DATASET_CONFIGS = {
         "database": DATA_DIR / "sf_xs" / "test" / "database",
         "queries":  DATA_DIR / "sf_xs" / "test" / "queries",
     },
+    "sf_xs_val": {
+        "database": DATA_DIR / "sf_xs" / "val" / "database",
+        "queries":  DATA_DIR / "sf_xs" / "val" / "queries",
+    },
     "tokyo_xs": {
         "database": DATA_DIR / "tokyo_xs" / "test" / "database",
         "queries":  DATA_DIR / "tokyo_xs" / "test" / "queries",
@@ -83,6 +87,9 @@ DATASET_CONFIGS = {
         "database": DATA_DIR / "svox" / "images" / "test" / "gallery",
         "queries":  DATA_DIR / "svox" / "images" / "test" / "queries_night",
     },
+    # GSV-XS: solo training, nessuna split db/query.
+    # Viene trattato come un unico flat set di immagini.
+    # Le query puntano alla stessa cartella ma vengono ignorate in feature_reduction.py.
     "gsv_xs_train": {
         "database": DATA_DIR / "gsv_xs" / "train",
         "queries":  DATA_DIR / "gsv_xs" / "train",
@@ -121,16 +128,16 @@ def _load_clique_mining(): return _get_model(method="clique-mining").eval()
 
 
 MODEL_CONFIGS: dict[str, ModelConfig] = {
-    #"clique_mining": ModelConfig("clique_mining", (322, 322), 8448,  _load_clique_mining),
+    "clique_mining": ModelConfig("clique_mining", (322, 322), 8448,  _load_clique_mining),
     "cosplace":      ModelConfig("cosplace",      (512, 512), 512,   _load_cosplace),
     "megaloc":       ModelConfig("megaloc",        (322, 322), 8448,  _load_megaloc),
     "netvlad":       ModelConfig("netvlad",        (480, 640), 4096,  _load_netvlad),
     "mixvpr":        ModelConfig("mixvpr",         (320, 320), 4096,  _load_mixvpr),
-    #"convap":        ModelConfig("convap",         (320, 320), 4096,  _load_convap),
-    #"sfrs":          ModelConfig("sfrs",           (480, 640), 4096,  _load_sfrs),
-    #"boq_resnet":    ModelConfig("boq_resnet",     (322, 322), 16384, _load_boq_resnet),
-    #"boq_dino":      ModelConfig("boq_dino",       (322, 322), 12288, _load_boq_dino),
-    #"dinomix":       ModelConfig("dinomix",        (224, 224), 4096,  _load_dinomix),
+    "convap":        ModelConfig("convap",         (320, 320), 4096,  _load_convap),
+    "sfrs":          ModelConfig("sfrs",           (480, 640), 4096,  _load_sfrs),
+    "boq_resnet":    ModelConfig("boq_resnet",     (322, 322), 16384, _load_boq_resnet),
+    "boq_dino":      ModelConfig("boq_dino",       (322, 322), 12288, _load_boq_dino),
+    "dinomix":       ModelConfig("dinomix",        (224, 224), 4096,  _load_dinomix),
 }
 
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
@@ -166,7 +173,8 @@ class ImageFolderDataset(Dataset):
 
 
 # ---------------------------------------------------------------------------
-# Estrazione — ritorna anche statistiche sui descrittori
+# Estrazione — scrive su disco a chunk via memmap, RAM costante indipendente
+# dalla dimensione del dataset
 # ---------------------------------------------------------------------------
 @torch.no_grad()
 def extract_descriptors(
@@ -176,50 +184,129 @@ def extract_descriptors(
     batch_size: int,
     num_workers: int,
     device: torch.device,
-) -> tuple[np.ndarray, list[Path], dict]:
+    out_dir: Path | None = None,   # se fornito, usa memmap direttamente qui
+) -> tuple[np.ndarray, np.ndarray, list[Path], dict]:
+    """
+    Estrae i descrittori scrivendo su disco a chunk (memmap).
+    Non accumula mai più di un batch in RAM.
+
+    Ritorna (desc_norm, desc_raw, paths, stats).
+    Se out_dir è fornito i memmap vengono scritti lì definitivamente,
+    altrimenti in una cartella temporanea che viene rimossa alla fine.
+    """
+    import tempfile, shutil
+
     dataset = ImageFolderDataset(folder, image_size)
     loader  = DataLoader(
         dataset, batch_size=batch_size, shuffle=False,
         num_workers=num_workers, pin_memory=(device.type == "cuda"),
     )
-    model = model.to(device)
-    t0    = time.time()
+    model    = model.to(device)
+    n_images = len(dataset)
 
-    all_desc_raw = []
+    # Primo batch per inferire la dimensione del descrittore
+    first_images, _ = next(iter(loader))
+    with torch.no_grad():
+        first_desc = model(first_images[:1].to(device))
+    D = first_desc.shape[1]
+    del first_desc
+
+    # Crea memmap su disco — RAM usata = solo un batch alla volta
+    tmp_dir    = Path(tempfile.mkdtemp(prefix="vpr_desc_")) if out_dir is None else out_dir
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    raw_path   = tmp_dir / "_raw_tmp.npy"
+    norm_path  = tmp_dir / "_norm_tmp.npy"
+
+    mm_raw  = np.lib.format.open_memmap(raw_path,  mode="w+", dtype=np.float32, shape=(n_images, D))
+    mm_norm = np.lib.format.open_memmap(norm_path, mode="w+", dtype=np.float32, shape=(n_images, D))
+
+    t0  = time.time()
+    idx = 0
     for images, _ in tqdm(loader, desc=f"  {folder.name}", leave=False):
-        desc = model(images.to(device))
-        all_desc_raw.append(desc.cpu().numpy())
+        desc = model(images.to(device)).cpu().numpy()          # (B, D)
+        B    = desc.shape[0]
+        norms = np.linalg.norm(desc, axis=1, keepdims=True)
+        desc_norm = desc / (norms + 1e-8)
+
+        mm_raw [idx:idx+B] = desc
+        mm_norm[idx:idx+B] = desc_norm
+        mm_raw.flush()
+        mm_norm.flush()
+        idx += B
 
     elapsed = time.time() - t0
-    desc_raw   = np.concatenate(all_desc_raw, axis=0)
-    desc_array = desc_raw / (np.linalg.norm(desc_raw, axis=1, keepdims=True) + 1e-8)  # L2-norm
-    n_images   = len(dataset)
+
+    # Statistiche calcolate a chunk per non caricare tutto in RAM
+    chunk_size = 1024
+    mean_acc = std_acc = min_val = max_val = None
+    for start in range(0, n_images, chunk_size):
+        chunk = mm_norm[start:start+chunk_size]
+        if mean_acc is None:
+            mean_acc = chunk.mean()
+            std_acc  = chunk.std()
+            min_val  = chunk.min()
+            max_val  = chunk.max()
+        else:
+            mean_acc = (mean_acc + chunk.mean()) / 2
+            min_val  = min(min_val, chunk.min())
+            max_val  = max(max_val, chunk.max())
 
     stats = {
-        "n_images":          n_images,
-        "descriptor_dim":    desc_array.shape[1],
-        "time_s":            round(elapsed, 3),
-        "throughput_img_s":  round(n_images / elapsed, 2) if elapsed > 0 else 0,
-        "memory_mb":         round(desc_array.nbytes / 1e6, 3),
-        "desc_mean":         round(float(desc_array.mean()), 6),
-        "desc_std":          round(float(desc_array.std()),  6),
-        "desc_min":          round(float(desc_array.min()),  6),
-        "desc_max":          round(float(desc_array.max()),  6),
+        "n_images":         n_images,
+        "descriptor_dim":   D,
+        "time_s":           round(elapsed, 3),
+        "throughput_img_s": round(n_images / elapsed, 2) if elapsed > 0 else 0,
+        "memory_mb":        round(n_images * D * 4 / 1e6, 3),
+        "desc_mean":        round(float(mean_acc), 6),
+        "desc_std":         round(float(std_acc),  6),
+        "desc_min":         round(float(min_val),  6),
+        "desc_max":         round(float(max_val),  6),
     }
-    return desc_array, desc_raw, dataset.paths, stats
+
+    # Se out_dir non era fornito, carica in RAM e pulisci il tmp
+    if out_dir is None:
+        desc_raw_out  = np.array(mm_raw)
+        desc_norm_out = np.array(mm_norm)
+        del mm_raw, mm_norm
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        return desc_norm_out, desc_raw_out, dataset.paths, stats
+    else:
+        # Ritorna i memmap stessi — vengono poi salvati da save_descriptors
+        return mm_norm, mm_raw, dataset.paths, stats
 
 
 # ---------------------------------------------------------------------------
 # I/O
 # ---------------------------------------------------------------------------
 def save_descriptors(out_dir, db_desc, db_desc_raw, q_desc, q_desc_raw, db_paths, q_paths):
+    """
+    Salva i descrittori su disco.
+    Se i descrittori sono già memmap con path dentro out_dir (estrazione large),
+    rinomina semplicemente i file temporanei invece di ricopiarli.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
-    np.save(out_dir / "database_descriptors.npy",     db_desc)      # L2-normalizzati (per dot product)
-    np.save(out_dir / "database_descriptors_raw.npy", db_desc_raw)  # grezzi (per L2 distance)
-    np.save(out_dir / "query_descriptors.npy",        q_desc)
-    np.save(out_dir / "query_descriptors_raw.npy",    q_desc_raw)
-    np.save(out_dir / "database_paths.npy",           np.array([str(p) for p in db_paths]))
-    np.save(out_dir / "query_paths.npy",              np.array([str(p) for p in q_paths]))
+
+    def _save_or_rename(arr, dest: Path):
+        """Rinomina se è un memmap già in out_dir, altrimenti np.save."""
+        if isinstance(arr, np.memmap):
+            src = Path(arr.filename)
+            if src.parent == out_dir and src != dest:
+                arr._mmap.close()
+                src.rename(dest)
+                return
+        np.save(dest, arr)
+
+    _save_or_rename(db_desc,     out_dir / "database_descriptors.npy")
+    _save_or_rename(db_desc_raw, out_dir / "database_descriptors_raw.npy")
+    _save_or_rename(q_desc,      out_dir / "query_descriptors.npy")
+    _save_or_rename(q_desc_raw,  out_dir / "query_descriptors_raw.npy")
+    np.save(out_dir / "database_paths.npy", np.array([str(p) for p in db_paths]))
+    np.save(out_dir / "query_paths.npy",    np.array([str(p) for p in q_paths]))
+
+    # Pulizia file temporanei rimasti
+    for tmp in out_dir.glob("_*_tmp.npy"):
+        tmp.unlink(missing_ok=True)
+
     log.info(f"  → {out_dir.relative_to(ROOT)}  "
              f"[db: {db_desc.shape}, query: {q_desc.shape}]")
 
@@ -314,12 +401,24 @@ def main():
 
             log.info(f"\n  Dataset: {dataset_name}")
 
+            # Passa out_dir: i memmap vengono scritti su disco a chunk,
+            # senza mai accumulare l'intero array in RAM.
+            import shutil
+            db_tmp = out_dir / "_db_tmp"
+            q_tmp  = out_dir / "_q_tmp"
+
             db_desc, db_desc_raw, db_paths, db_stats = extract_descriptors(
-                model, db_folder, cfg.image_size, args.batch_size, args.num_workers, device)
+                model, db_folder, cfg.image_size, args.batch_size, args.num_workers, device,
+                out_dir=db_tmp)
             q_desc, q_desc_raw, q_paths, q_stats = extract_descriptors(
-                model, q_folder, cfg.image_size, args.batch_size, args.num_workers, device)
+                model, q_folder, cfg.image_size, args.batch_size, args.num_workers, device,
+                out_dir=q_tmp)
 
             save_descriptors(out_dir, db_desc, db_desc_raw, q_desc, q_desc_raw, db_paths, q_paths)
+
+            for tmp in [db_tmp, q_tmp]:
+                if tmp.exists():
+                    shutil.rmtree(tmp, ignore_errors=True)
 
             # Salva metadata JSON per questo run
             meta = {
