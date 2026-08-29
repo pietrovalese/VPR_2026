@@ -1082,13 +1082,30 @@ def main():
             f"({100*(1-best_topk_frac):.0f}% rimosso)"
         )
 
+        # Salva la maschera booleana effettiva del top-K per varianza.
+        # A differenza di mask_final.npy (attivazione AND ridondanza multi-layer),
+        # questa è la strategia che riduce davvero la dimensionalità quando le
+        # dimensioni del descrittore sono poco correlate tra loro (Pearson/Spearman/MI
+        # bassi ovunque -> mask_redundancy quasi sempre True -> mask_final non rimuove
+        # quasi nulla). uncertainty_estimation.py usa questa maschera per la 6.2.
+        topk_n_keep = max(1, int(D * best_topk_frac))
+        topk_sorted_feats = np.argsort(stats["variance"])[::-1]
+        mask_topk_variance = np.zeros(D, dtype=bool)
+        mask_topk_variance[topk_sorted_feats[:topk_n_keep]] = True
+        np.save(method_dir / "mask_topk_variance.npy", mask_topk_variance)
+        log.info(f"  Salvata mask_topk_variance.npy: {topk_n_keep}/{D} feature mantenute")
+
         # ----------------------------------------------------------------
         # Step 6 — Grad-CAM
         # ----------------------------------------------------------------
         log.info(f"  Grad-CAM ({args.n_gradcam_imgs} immagini)...")
-        removed_feats = np.where(~final_mask)[0]
-        kept_feats    = np.where(final_mask)[0]
-        removed_top   = removed_feats[np.argsort(redund_scores[removed_feats])[::-1]][:5] \
+        # Usa mask_topk_variance (non final_mask): è la maschera che riduce
+        # davvero la dimensionalità (vedi nota sopra). Le feature "rimosse" più
+        # rappresentative sono quelle a varianza più bassa tra le scartate; le
+        # "mantenute" più rappresentative quelle a varianza più alta tra le tenute.
+        removed_feats = np.where(~mask_topk_variance)[0]
+        kept_feats    = np.where(mask_topk_variance)[0]
+        removed_top   = removed_feats[np.argsort(stats["variance"][removed_feats])][:5] \
                         if len(removed_feats) > 0 else []
         kept_top      = kept_feats[np.argsort(stats["variance"][kept_feats])[::-1]][:5]
 
@@ -1137,6 +1154,7 @@ def main():
             },
             # Risultati curva top-K varianza
             "topk_variance":     result_topk,
+            "topk_test_rows":    topk_test_rows,
             "n_dead_features":   dead,
             "baseline_val":      {f"R@{n}": round(v, 4) for n, v in baseline_recall.items()},
             "test_results":      test_results,
@@ -1164,6 +1182,7 @@ def _save_summary(rows, rv):
     for ds in TEST_DATASETS:
         for n in rv:
             fieldnames += [f"{ds}_R@{n}_full", f"{ds}_R@{n}_compressed", f"{ds}_R@{n}_delta"]
+            fieldnames += [f"{ds}_R@{n}_full_topk", f"{ds}_R@{n}_compressed_topk", f"{ds}_R@{n}_delta_topk"]
 
     flat_rows = []
     for r in rows:
@@ -1185,6 +1204,26 @@ def _save_summary(rows, rv):
                 flat[f"{ds_name}_R@{n}_full"]       = ds_res["recall_full"].get(key)
                 flat[f"{ds_name}_R@{n}_compressed"] = ds_res["recall_compressed"].get(key)
                 flat[f"{ds_name}_R@{n}_delta"]      = ds_res["recall_delta"].get(key)
+
+        # Colonne "_topk": stessa full/compressed/delta ma con la maschera a
+        # varianza (quella che comprime davvero), lette da topk_test_rows —
+        # già calcolate nello Step 5, nessuna rivalutazione necessaria.
+        topk_rows = r.get("topk_test_rows", [])
+        for ds_name in TEST_DATASETS:
+            row_full = next((row for row in topk_rows
+                              if row["dataset"] == ds_name and row["topk_fraction"] == 1.0), None)
+            row_comp = next((row for row in topk_rows
+                              if row["dataset"] == ds_name and row.get("is_optimal")), None)
+            if row_full is None or row_comp is None:
+                continue
+            for n in rv:
+                key = f"R@{n}"
+                full_v = row_full.get(key)
+                comp_v = row_comp.get(key)
+                flat[f"{ds_name}_R@{n}_full_topk"]       = full_v
+                flat[f"{ds_name}_R@{n}_compressed_topk"] = comp_v
+                if full_v is not None and comp_v is not None:
+                    flat[f"{ds_name}_R@{n}_delta_topk"] = round(comp_v - full_v, 4)
         flat_rows.append(flat)
 
     with open(csv_path, "w", newline="") as f:

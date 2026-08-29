@@ -643,7 +643,7 @@ def plot_gradcam(dpi):
 # ===========================================================================
 def build_tables(knn_df, matching_df):
     print("  Tabelle CSV...")
-    rv = [1, 5, 10]
+    rv = [1, 5, 10, 20]
 
     # Recall table
     rows = []
