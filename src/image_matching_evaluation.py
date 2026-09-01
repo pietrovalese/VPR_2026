@@ -1,25 +1,3 @@
-"""
-src/image_matching_evaluation.py
-
-Re-ranking con image matching sulle predizioni KNN + raccolta massiva di metriche.
-
-Output:
-    logs/results/matching/
-    └── <dataset>_<method>_<matcher>/
-        ├── inliers.npy              # (N_q, num_preds)
-        ├── reranked_preds.npy       # (N_q, K)
-        ├── per_query_inliers.npy    # (N_q,) inliers con top-1 originale
-        ├── correct_mask.npy         # (N_q,) bool correttezza R@1 prima re-ranking
-        └── results.json
-
-    logs/results/matching_summary.csv
-
-Uso:
-    python src/image_matching_evaluation.py
-    python src/image_matching_evaluation.py --methods cosplace --matchers superglue
-    python src/image_matching_evaluation.py --overwrite
-"""
-
 import argparse
 import csv
 import json
@@ -47,9 +25,9 @@ if IMAGE_MATCHING_DIR.exists():
     if str(IMAGE_MATCHING_DIR) not in sys.path:
         sys.path.insert(0, str(IMAGE_MATCHING_DIR))
 else:
-    print(f"[WARNING] {IMAGE_MATCHING_DIR} non trovato.", flush=True)
+    print(f"[WARNING] {IMAGE_MATCHING_DIR} not found.", flush=True)
 
-# Logging con flush forzato — evita buffering che blocca l'output
+# Logging with forced flush - avoids buffering that would stall the output
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
@@ -59,11 +37,14 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# Forza flush immediato su stdout e stderr
+
 class FlushHandler(logging.StreamHandler):
+    """StreamHandler that flushes immediately after every emitted record."""
+
     def emit(self, record):
         super().emit(record)
         self.flush()
+
 
 for h in logging.root.handlers:
     h.__class__ = FlushHandler
@@ -72,17 +53,16 @@ REQUIRED_MATCHERS = ["superglue", "loftr", "superpoint-lg"]
 GPS_THRESHOLD_M   = 25.0
 
 
-# ---------------------------------------------------------------------------
-# Utility: print con flush garantito
-# ---------------------------------------------------------------------------
 def pprint(msg: str):
+    """Print with a guaranteed flush, so progress is visible immediately in redirected logs."""
     print(msg, flush=True)
 
 
 # ---------------------------------------------------------------------------
-# Coordinate GPS
+# GPS coordinates
 # ---------------------------------------------------------------------------
 def parse_utm_from_path(path: str) -> tuple[float, float] | None:
+    """Extract the first two '@'-separated numeric fields from a filename (UTM easting/northing)."""
     stem  = Path(path).stem
     parts = stem.split("@")
     nums  = []
@@ -99,6 +79,7 @@ def parse_utm_from_path(path: str) -> tuple[float, float] | None:
 
 
 def extract_utm_coords(paths: np.ndarray) -> np.ndarray:
+    """Parse UTM coords for every path; unparseable ones become (nan, nan)."""
     coords = []
     for p in paths:
         r = parse_utm_from_path(str(p))
@@ -116,6 +97,7 @@ def compute_recall_and_correct(
     recall_values: list[int],
     threshold_m: float = GPS_THRESHOLD_M,
 ) -> tuple[dict[int, float], np.ndarray]:
+    """Compute Recall@N and the per-query R@1 correctness mask."""
     N_q       = len(q_coords)
     correct   = {n: 0 for n in recall_values}
     correct_r1 = np.zeros(N_q, dtype=bool)
@@ -137,9 +119,10 @@ def compute_recall_and_correct(
 
 
 # ---------------------------------------------------------------------------
-# Conteggio inliers
+# Inlier counting
 # ---------------------------------------------------------------------------
 def count_inliers(result: dict) -> int:
+    """Extract the inlier count from a matcher result dict, trying a few known key names."""
     if "num_inliers" in result:
         v = result["num_inliers"]
         return int(v) if v is not None else 0
@@ -151,7 +134,7 @@ def count_inliers(result: dict) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Matching per singola query
+# Matching for a single query
 # ---------------------------------------------------------------------------
 def run_matching_for_query(
     matcher,
@@ -161,6 +144,7 @@ def run_matching_for_query(
     img_size: int,
     num_preds: int,
 ) -> tuple[np.ndarray, float, float]:
+    """Match one query image against its top-`num_preds` KNN predictions and return inlier counts and timing."""
     img0    = matcher.load_image(q_path, resize=img_size)
     inliers = np.zeros(num_preds, dtype=np.int32)
     t_start = time.time()
@@ -172,7 +156,7 @@ def run_matching_for_query(
             result = matcher(deepcopy(img0), img1)
             inliers[rank] = count_inliers(result)
         except Exception as e:
-            log.debug(f"    Matching fallito [{rank}]: {e}")
+            log.debug(f"    Matching failed [{rank}]: {e}")
             inliers[rank] = 0
 
     elapsed = time.time() - t_start
@@ -180,9 +164,10 @@ def run_matching_for_query(
 
 
 # ---------------------------------------------------------------------------
-# Discovery combinazioni
+# Combination discovery
 # ---------------------------------------------------------------------------
 def discover_combinations(datasets_filter, methods_filter, metric):
+    """Walk logs/descriptors/<dataset>/<method>/ and collect combos that have matching KNN predictions."""
     combos = []
     if not DESC_DIR.exists():
         return combos
@@ -202,8 +187,8 @@ def discover_combinations(datasets_filter, methods_filter, metric):
             preds_file = PREDS_DIR / f"{ds_dir.name}_{m_dir.name}_{metric}_preds.npy"
             if not preds_file.exists():
                 pprint(
-                    f"[WARN] Predizioni non trovate: {preds_file.name}\n"
-                    f"       Esegui prima: python src/knn_evaluation.py --metrics {metric}"
+                    f"[WARN] Predictions not found: {preds_file.name}\n"
+                    f"       Run first: python src/knn_evaluation.py --metrics {metric}"
                 )
                 continue
             combos.append((ds_dir.name, m_dir.name, m_dir, preds_file))
@@ -214,6 +199,7 @@ def discover_combinations(datasets_filter, methods_filter, metric):
 # CLI
 # ---------------------------------------------------------------------------
 def parse_args():
+    """Parse command-line arguments."""
     p = argparse.ArgumentParser()
     p.add_argument("--datasets",      nargs="+", default=None)
     p.add_argument("--methods",       nargs="+", default=None)
@@ -228,6 +214,7 @@ def parse_args():
 
 
 def resolve_device(s: str) -> str:
+    """Resolve the --device argument, auto-detecting CUDA when requested."""
     if s == "auto":
         return "cuda" if torch.cuda.is_available() else "cpu"
     return s
@@ -237,23 +224,24 @@ def resolve_device(s: str) -> str:
 # Main
 # ---------------------------------------------------------------------------
 def main():
+    """Re-rank KNN predictions with every requested image-matching method and collect metrics."""
     args   = parse_args()
     device = resolve_device(args.device)
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    pprint(f"[INFO] Caricamento modulo 'matching' da {IMAGE_MATCHING_DIR} ...")
+    pprint(f"[INFO] Loading 'matching' module from {IMAGE_MATCHING_DIR} ...")
     try:
         from matching import get_matcher
-        pprint("[INFO] Modulo 'matching' caricato.")
+        pprint("[INFO] 'matching' module loaded.")
     except ImportError as e:
-        pprint(f"[ERROR] Impossibile importare 'matching': {e}")
+        pprint(f"[ERROR] Cannot import 'matching': {e}")
         return
 
     combos = discover_combinations(args.datasets, args.methods, args.metric)
     if not combos:
         pprint(
-            "[ERROR] Nessuna combinazione disponibile.\n"
-            "Esegui prima:\n"
+            "[ERROR] No combination available.\n"
+            "Run first:\n"
             "  python src/extract_descriptors.py\n"
             f"  python src/knn_evaluation.py --metrics {args.metric}"
         )
@@ -261,7 +249,7 @@ def main():
 
     pprint(f"[INFO] Device   : {device}")
     pprint(f"[INFO] Matchers : {args.matchers}")
-    pprint(f"[INFO] Combos   : {len(combos)} (dataset x metodo)")
+    pprint(f"[INFO] Combos   : {len(combos)} (dataset x method)")
     pprint(f"[INFO] Num preds: {args.num_preds}  |  Img size: {args.img_size}x{args.img_size}")
     pprint(f"[INFO] Recall@N : {args.recall_values}")
     pprint("")
@@ -271,23 +259,23 @@ def main():
     for matcher_name in args.matchers:
         pprint(f"\n{'='*65}")
         pprint(f"[STEP] Matcher: {matcher_name.upper()}")
-        pprint(f"[INFO] Caricamento pesi... (potrebbe richiedere tempo al primo avvio)")
+        pprint(f"[INFO] Loading weights... (may take a while on first run)")
         sys.stdout.flush()
 
         t_load = time.time()
         try:
             matcher = get_matcher(matcher_name, device=device)
         except Exception as e:
-            pprint(f"[WARN] SKIP {matcher_name} — impossibile caricare: {e}")
+            pprint(f"[WARN] SKIP {matcher_name} - could not load: {e}")
             continue
         matcher_load_time = round(time.time() - t_load, 2)
-        pprint(f"[OK]   Matcher caricato in {matcher_load_time}s")
+        pprint(f"[OK]   Matcher loaded in {matcher_load_time}s")
 
         for dataset_name, method_name, desc_dir, preds_file in combos:
             out_dir = RESULTS_DIR / f"{dataset_name}_{method_name}_{matcher_name}"
 
             if (out_dir / "results.json").exists() and not args.overwrite:
-                pprint(f"[SKIP] {dataset_name} | {method_name} — già calcolato (usa --overwrite)")
+                pprint(f"[SKIP] {dataset_name} | {method_name} - already computed (use --overwrite)")
                 with open(out_dir / "results.json") as f:
                     summary_rows.append(json.load(f))
                 continue
@@ -304,16 +292,16 @@ def main():
             K         = knn_preds.shape[1]
             num_preds = min(args.num_preds, K)
 
-            pprint(f"[INFO] {N_q} query  |  K={K}  |  re-ranking top-{num_preds}")
+            pprint(f"[INFO] {N_q} queries  |  K={K}  |  re-ranking top-{num_preds}")
 
-            # Recall PRIMA del re-ranking
+            # Recall BEFORE re-ranking
             recall_before, correct_r1_before = compute_recall_and_correct(
                 knn_preds, q_coords, db_coords, args.recall_values
             )
             before_str = "  ".join(f"R@{n}={v:.2f}%" for n, v in recall_before.items())
-            pprint(f"[INFO] Recall prima re-ranking: {before_str}")
+            pprint(f"[INFO] Recall before re-ranking: {before_str}")
 
-            # Matrici risultato
+            # Result matrices
             all_inliers        = np.zeros((N_q, num_preds), dtype=np.int32)
             all_reranked_preds = knn_preds.copy()
             times_query        = []
@@ -321,7 +309,6 @@ def main():
 
             t_total = time.time()
 
-            # Loop query con tqdm — sempre visibile
             for q_idx in tqdm(
                 range(N_q),
                 desc=f"  {matcher_name} | {dataset_name} | {method_name}",
@@ -342,12 +329,12 @@ def main():
 
             total_time = time.time() - t_total
 
-            # Recall DOPO il re-ranking
+            # Recall AFTER re-ranking
             recall_after, _ = compute_recall_and_correct(
                 all_reranked_preds, q_coords, db_coords, args.recall_values
             )
 
-            # Statistiche inliers
+            # Inlier statistics
             top1_inliers      = all_inliers[:, 0]
             inliers_correct   = top1_inliers[correct_r1_before]
             inliers_incorrect = top1_inliers[~correct_r1_before]
@@ -371,7 +358,6 @@ def main():
                 "matcher_load_time_s":  matcher_load_time,
             }
 
-            # Salvataggio
             out_dir.mkdir(parents=True, exist_ok=True)
             np.save(out_dir / "inliers.npy",           all_inliers)
             np.save(out_dir / "reranked_preds.npy",    all_reranked_preds)
@@ -397,24 +383,23 @@ def main():
                 json.dump(row, f, indent=2)
             summary_rows.append(row)
 
-            # Riepilogo
             after_str = "  ".join(f"R@{n}={v:.2f}%" for n, v in recall_after.items())
-            delta_str = "  ".join(f"ΔR@{n}={recall_after[n]-recall_before[n]:+.2f}%" for n in args.recall_values)
-            pprint(f"[OK]   Recall dopo re-ranking : {after_str}")
-            pprint(f"[OK]   Delta                  : {delta_str}")
+            delta_str = "  ".join(f"dR@{n}={recall_after[n]-recall_before[n]:+.2f}%" for n in args.recall_values)
+            pprint(f"[OK]   Recall after re-ranking : {after_str}")
+            pprint(f"[OK]   Delta                   : {delta_str}")
             pprint(
-                f"[OK]   Tempo: {total_time:.1f}s tot  |  "
+                f"[OK]   Time: {total_time:.1f}s total  |  "
                 f"{timing_stats['avg_time_per_query_s']:.3f}s/query  |  "
-                f"{timing_stats['avg_time_per_pair_s']:.4f}s/coppia"
+                f"{timing_stats['avg_time_per_pair_s']:.4f}s/pair"
             )
             pprint(
-                f"[OK]   Inliers top-1: mean={inlier_stats['mean_all']:.1f}  "
-                f"corretto={inlier_stats['mean_correct']}  "
-                f"sbagliato={inlier_stats['mean_incorrect']}"
+                f"[OK]   Top-1 inliers: mean={inlier_stats['mean_all']:.1f}  "
+                f"correct={inlier_stats['mean_correct']}  "
+                f"incorrect={inlier_stats['mean_incorrect']}"
             )
 
     if not summary_rows:
-        pprint("[WARN] Nessun risultato prodotto.")
+        pprint("[WARN] No result produced.")
         return
 
     _print_summary(summary_rows, args.recall_values)
@@ -422,15 +407,16 @@ def main():
 
 
 # ---------------------------------------------------------------------------
-# Output finale
+# Final output
 # ---------------------------------------------------------------------------
 def _print_summary(rows, recall_values):
+    """Print a formatted before/after Recall@N summary table to stdout."""
     pprint("\n" + "="*90)
-    pprint("RIASSUNTO FINALE — Re-ranking con Image Matching")
+    pprint("FINAL SUMMARY - Re-ranking with Image Matching")
     pprint("="*90)
     header = f"{'VPR':<15} {'Matcher':<16} {'Dataset':<18}"
     for n in recall_values:
-        header += f"  R@{n}(B) R@{n}(A)    Δ"
+        header += f"  R@{n}(B) R@{n}(A)    D"
     header += "  t/query(s)"
     pprint(header)
     pprint("-"*len(header))
@@ -448,6 +434,7 @@ def _print_summary(rows, recall_values):
 
 
 def _save_summary_csv(rows, recall_values):
+    """Flatten all per-combo result dicts into logs/results/matching_summary.csv."""
     csv_path = RESULTS_DIR.parent / "matching_summary.csv"
     fieldnames = [
         "dataset", "vpr_method", "matcher", "num_preds", "img_size", "metric",
@@ -486,7 +473,7 @@ def _save_summary_csv(rows, recall_values):
         writer.writeheader()
         writer.writerows(flat_rows)
 
-    pprint(f"\n[OK] matching_summary.csv salvato → {csv_path}")
+    pprint(f"\n[OK] matching_summary.csv saved -> {csv_path}")
 
 
 if __name__ == "__main__":

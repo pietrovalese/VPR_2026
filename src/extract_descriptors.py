@@ -1,16 +1,3 @@
-"""
-Extract and save VPR descriptors for database/query images across all datasets.
-Uses the models from deps/VPR-methods-evaluation.
-
-Output: logs/descriptors/<dataset>/<method>/{database,query}_descriptors[_raw].npy
-        logs/results/extraction_metrics.csv
-
-Usage:
-    python src/extract_descriptors.py
-    python src/extract_descriptors.py --methods cosplace megaloc
-    python src/extract_descriptors.py --datasets sf_xs_test tokyo_xs --overwrite
-"""
-
 import argparse
 import csv
 import json
@@ -250,6 +237,7 @@ def append_metrics_csv(rows: list[dict]):
 
 
 def parse_args():
+    """Parse command-line arguments."""
     p = argparse.ArgumentParser()
     p.add_argument("--datasets", nargs="+", choices=list(DATASET_CONFIGS.keys()), default=list(DATASET_CONFIGS.keys()))
     p.add_argument("--methods", nargs="+", choices=list(MODEL_CONFIGS.keys()), default=list(MODEL_CONFIGS.keys()))
@@ -261,12 +249,14 @@ def parse_args():
 
 
 def resolve_device(s: str) -> torch.device:
+    """Resolve the --device argument to a torch.device, auto-detecting CUDA when requested."""
     if s == "auto":
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
     return torch.device(s)
 
 
 def main():
+    """Extract and save descriptors for every requested method/dataset combination."""
     args = parse_args()
     device = resolve_device(args.device)
     ts = time.strftime("%Y-%m-%dT%H:%M:%S")
