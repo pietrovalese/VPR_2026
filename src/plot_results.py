@@ -1,33 +1,3 @@
-"""
-src/plot_results.py
-
-Genera tutti i plot per il report VPR — Sezione 5 ed Estensione 6.3.
-
-Figure prodotte in logs/plots/:
-
-  Sezione 5:
-    01_recall_bar.png          — R@1/R@5/R@10 per metodo x dataset
-    02_l2_vs_dot.png           — confronto L2 vs dot product
-    03_reranking_delta.png     — guadagno recall dopo re-ranking
-    04_timing_tradeoff.png     — scatter R@1 vs tempo per query
-    05_inlier_histograms.png   — distribuzione inliers corretto vs sbagliato
-
-  Estensione 6.3:
-    06_topk_curve.png          — curva dimensione/recall top-K varianza
-    07_memory_saving.png       — memoria full vs compressed
-    08_gradcam_<method>.png    — Grad-CAM feature eliminate vs mantenute
-
-  Tabelle CSV:
-    table_recall.csv           — tabella paper-ready Recall@N
-    table_memory.csv           — memoria full vs compressed
-    table_timing.csv           — tempi per stage
-
-Uso:
-    python src/plot_results.py
-    python src/plot_results.py --only 01 05 06
-    python src/plot_results.py --dpi 300
-"""
-
 import argparse
 import json
 import warnings
@@ -97,6 +67,7 @@ plt.rcParams.update({
 
 
 def save(fig, name, dpi=300):
+    """Save a matplotlib figure under PLOTS_DIR and print its relative path."""
     path = PLOTS_DIR / name
     fig.savefig(path, dpi=dpi)
     plt.close(fig)
@@ -104,22 +75,27 @@ def save(fig, name, dpi=300):
 
 
 def load_knn():
+    """Load the Recall@N table produced by knn_evaluation.py."""
     p = RESULTS_DIR / "recall_table.csv"
     return pd.read_csv(p) if p.exists() else None
 
 def load_matching():
+    """Load the image-matching summary produced by image_matching_evaluation.py."""
     p = RESULTS_DIR / "matching_summary.csv"
     return pd.read_csv(p) if p.exists() else None
 
 def load_feat_results(method):
+    """Load results.json for a given method from the feature-reduction output."""
     p = FEAT_DIR / method / "results.json"
     return json.loads(p.read_text()) if p.exists() else None
 
 def load_topk_curve(method, split="val"):
+    """Load the top-K-by-variance size/recall curve for a given method and split."""
     p = FEAT_DIR / method / f"topk_curve_{split}.csv"
     return pd.read_csv(p) if p.exists() else None
 
 def get_n_db(dataset, method):
+    """Return the number of database images for a dataset/method, or None if not extracted."""
     p = DESC_DIR / dataset / method / "database_paths.npy"
     if not p.exists():
         return None
@@ -130,13 +106,14 @@ def get_n_db(dataset, method):
 # 01 — Recall bar chart
 # ===========================================================================
 def plot_recall_bar(knn_df, dpi):
+    """Plot Recall@1/5/10 bar chart per method x dataset."""
     print("  [01] recall bar chart...")
     metric = "dot" if "dot" in knn_df["metric"].values else knn_df["metric"].iloc[0]
     df = knn_df[(knn_df["metric"] == metric) &
                 knn_df["method"].isin(METHODS) &
                 knn_df["dataset"].isin(DATASETS)]
     if df.empty:
-        print("    skip: nessun dato")
+        print("    skip: no data")
         return
 
     datasets = [d for d in DATASETS if d in df["dataset"].unique()]
@@ -191,9 +168,10 @@ def plot_recall_bar(knn_df, dpi):
 # 02 — L2 vs Dot
 # ===========================================================================
 def plot_l2_vs_dot(knn_df, dpi):
+    """Scatter plot comparing R@1 under the L2 metric vs the dot-product metric."""
     print("  [02] L2 vs dot...")
     if "dot" not in knn_df["metric"].values or "l2" not in knn_df["metric"].values:
-        print("    skip: servono entrambe le metriche")
+        print("    skip: both metrics are required")
         return
 
     df       = knn_df[knn_df["method"].isin(METHODS) & knn_df["dataset"].isin(DATASETS)]
@@ -240,12 +218,13 @@ def plot_l2_vs_dot(knn_df, dpi):
 # 03 — Re-ranking delta
 # ===========================================================================
 def plot_reranking_delta(matching_df, dpi):
+    """Bar plot of R@1 gain after re-ranking, per method x matcher x dataset."""
     print("  [03] re-ranking delta...")
     df = matching_df[matching_df["vpr_method"].isin(METHODS) &
                      matching_df["dataset"].isin(DATASETS) &
                      matching_df["matcher"].isin(MATCHERS)]
     if df.empty:
-        print("    skip: nessun dato matching")
+        print("    skip: no matching data")
         return
 
     methods  = [m for m in METHODS  if m in df["vpr_method"].unique()]
@@ -297,6 +276,7 @@ def plot_reranking_delta(matching_df, dpi):
 # 04 — Timing trade-off
 # ===========================================================================
 def plot_timing_tradeoff(knn_df, matching_df, dpi):
+    """Scatter plot of R@1 vs time per query, for retrieval-only and each matcher."""
     print("  [04] timing trade-off...")
 
     metric = "dot" if knn_df is not None and "dot" in knn_df["metric"].values else "l2"
@@ -329,7 +309,7 @@ def plot_timing_tradeoff(knn_df, matching_df, dpi):
             })
 
     if not points:
-        print("    skip: nessun dato")
+        print("    skip: no data")
         return
 
     pf = pd.DataFrame(points)
@@ -382,10 +362,11 @@ def plot_timing_tradeoff(knn_df, matching_df, dpi):
 
 
 # ===========================================================================
-# 05 — Istogrammi inliers
+# 05 - Inlier histograms
 # ===========================================================================
 def plot_inlier_histograms(dpi):
-    print("  [05] istogrammi inliers...")
+    """Plot inlier-count histograms for correct vs wrong top-1 retrievals."""
+    print("  [05] inlier histograms...")
 
     combos = []
     if MATCHING_DIR.exists():
@@ -394,10 +375,10 @@ def plot_inlier_histograms(dpi):
                 combos.append(d)
 
     if not combos:
-        print("    skip: nessun dato inliers")
+        print("    skip: no inliers data")
         return
 
-    # Preferisci superglue, max 8 combo
+    # Prefer superglue, max 8 combos
     sg = [c for c in combos if "superglue" in c.name]
     show = (sg if sg else combos)[:8]
 
@@ -437,15 +418,16 @@ def plot_inlier_histograms(dpi):
 
 
 # ===========================================================================
-# 06 — Curva top-K varianza
+# 06 - Top-K variance curve
 # ===========================================================================
 def plot_topk_curve(dpi):
-    print("  [06] curva top-K varianza...")
+    """Plot the size/recall curve for the top-K-by-variance feature reduction."""
+    print("  [06] top-K variance curve...")
 
     methods_avail = [m for m in ["cosplace", "megaloc"]
                      if (FEAT_DIR / m / "topk_curve_val.csv").exists()]
     if not methods_avail:
-        print("    skip: topk_curve_val.csv non trovato")
+        print("    skip: topk_curve_val.csv not found")
         return
 
     fig, axes = plt.subplots(1, len(methods_avail),
@@ -476,7 +458,7 @@ def plot_topk_curve(dpi):
                        label=f"Baseline {baseline[0]:.1f}%")
             ax.axhline(baseline[0]-2, color="gray", ls=":", lw=1, alpha=0.4,
                        label="Baseline -2%")
-            # Punto ottimale
+            # Optimal point
             valid = df[df[r1_col] >= baseline[0]-2]
             if not valid.empty:
                 opt = valid.sort_values("n_kept").iloc[0]
@@ -490,7 +472,7 @@ def plot_topk_curve(dpi):
         ax.legend(fontsize=9)
         ax.grid(True, alpha=0.3)
 
-        # Asse secondario con percentuale
+        # Secondary axis with percentage
         ax2 = ax.twiny()
         ax2.set_xlim(ax.get_xlim())
         ticks = [t for t in ax.get_xticks() if 0 <= t <= D]
@@ -504,9 +486,10 @@ def plot_topk_curve(dpi):
 
 
 # ===========================================================================
-# 07 — Memoria
+# 07 - Memory
 # ===========================================================================
 def plot_memory_saving(dpi):
+    """Bar plot comparing database memory usage: full vs compressed descriptors."""
     print("  [07] memory saving...")
 
     rows = []
@@ -536,7 +519,7 @@ def plot_memory_saving(dpi):
             })
 
     if not rows:
-        print("    skip: nessun dato")
+        print("    skip: no data")
         return
 
     df = pd.DataFrame(rows)
@@ -574,6 +557,7 @@ def plot_memory_saving(dpi):
 # 08 — Grad-CAM
 # ===========================================================================
 def plot_gradcam(dpi):
+    """Plot Grad-CAM heatmaps for kept vs removed descriptor features."""
     print("  [08] Grad-CAM...")
 
     for method in ["cosplace", "megaloc"]:
@@ -600,7 +584,7 @@ def plot_gradcam(dpi):
             axes = axes[np.newaxis, :]
 
         for img_i in range(n_imgs):
-            # Immagine originale
+            # Original image
             try:
                 img = Image.open(img_paths[img_i]).convert("RGB")
                 axes[img_i, 0].imshow(img)
@@ -639,10 +623,11 @@ def plot_gradcam(dpi):
 
 
 # ===========================================================================
-# Tabelle CSV paper-ready
+# Paper-ready CSV tables
 # ===========================================================================
 def build_tables(knn_df, matching_df):
-    print("  Tabelle CSV...")
+    """Build paper-ready Recall@N and timing CSV tables."""
+    print("  CSV tables...")
     rv = [1, 5, 10, 20]
 
     # Recall table
@@ -679,7 +664,7 @@ def build_tables(knn_df, matching_df):
 
     if rows:
         pd.DataFrame(rows).to_csv(PLOTS_DIR / "table_recall.csv", index=False)
-        print(f"    table_recall.csv ({len(rows)} righe)")
+        print(f"    table_recall.csv ({len(rows)} rows)")
 
     # Timing table
     rows = []
@@ -710,31 +695,34 @@ def build_tables(knn_df, matching_df):
             })
     if rows:
         pd.DataFrame(rows).to_csv(PLOTS_DIR / "table_timing.csv", index=False)
-        print(f"    table_timing.csv ({len(rows)} righe)")
+        print(f"    table_timing.csv ({len(rows)} rows)")
 
 
 # ===========================================================================
 # CLI
 # ===========================================================================
 def parse_args():
+    """Parse command-line arguments."""
     p = argparse.ArgumentParser()
     p.add_argument("--only", nargs="+", default=None,
-                   help="Es: --only 01 05 06")
+                   help="E.g.: --only 01 05 06")
     p.add_argument("--dpi",  type=int, default=300)
     return p.parse_args()
 
 def should_run(name, only):
+    """Check whether a plot with the given id prefix should run, based on --only."""
     return only is None or any(name.startswith(o) for o in only)
 
 def main():
+    """Load all pipeline results and generate every requested plot/table."""
     args = parse_args()
     print(f"Output -> {PLOTS_DIR.relative_to(ROOT)}/\n")
 
     knn_df      = load_knn()
     matching_df = load_matching()
 
-    if knn_df is not None:      print(f"KNN:      {len(knn_df)} righe")
-    if matching_df is not None: print(f"Matching: {len(matching_df)} righe")
+    if knn_df is not None:      print(f"KNN:      {len(knn_df)} rows")
+    if matching_df is not None: print(f"Matching: {len(matching_df)} rows")
     print()
 
     if should_run("01", args.only) and knn_df is not None:

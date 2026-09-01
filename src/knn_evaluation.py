@@ -1,22 +1,3 @@
-"""
-Load descriptors from logs/descriptors/, run KNN with L2 and dot product,
-and compute Recall@N for every method x dataset x metric combination.
-
-Output:
-    logs/results/
-        recall_table.csv     - summary table (one row per combo)
-        knn_results.json     - same results, machine-readable
-        knn_per_query.csv    - per-query correctness (useful for inlier analysis)
-        predictions/         - KNN indices/scores, always saved
-            <dataset>_<method>_<metric>_preds.npy
-            <dataset>_<method>_<metric>_scores.npy
-
-Usage:
-    python3 knn_evaluation.py
-    python3 knn_evaluation.py --methods cosplace --recall_values 1 5 10 20
-    python3 knn_evaluation.py --metrics l2 dot   # compare both
-"""
-
 import argparse
 import json
 import logging
@@ -185,6 +166,7 @@ def discover_combinations(datasets_filter, methods_filter):
 
 
 def parse_args():
+    """Parse command-line arguments."""
     p = argparse.ArgumentParser()
     p.add_argument("--datasets", nargs="+", default=None)
     p.add_argument("--methods", nargs="+", default=None)
@@ -198,6 +180,7 @@ def parse_args():
 
 
 def main():
+    """Run KNN retrieval and Recall@N evaluation for every dataset/method/metric combination."""
     args = parse_args()
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     preds_dir = RESULTS_DIR / "predictions"
