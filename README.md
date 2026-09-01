@@ -1,6 +1,6 @@
 # VPR_2026
 
-Visual Place Recognition (VPR) project for the 2026 course/year.
+Visual Place Recognition (VPR) project for the Machine Learning for Mathematical Engineering 2026 course.
 
 ## Cloning the repository
 
@@ -31,7 +31,7 @@ bash setup_deps.sh
 ```
 
 
-## 🛠️ Project structure
+## Project structure
 
 ```
 VPR_2026/
